@@ -11,13 +11,14 @@ import sys
 import colorama
 import logging
 import yaml
+from jinja2 import Environment
 from lxml import etree
 from jnpr.jsnapy.operator import Operator
 from jnpr.jsnapy.sqlite_get import SqliteExtractXml
 from icdiff import diff, codec_print, get_options, ConsoleDiff
 from jnpr.jsnapy.xml_comparator import XmlComparator
 from jnpr.jsnapy import get_path
-
+from jnpr.jsnapy.templates import TemplateRenderer
 
 class Comparator:
 
@@ -544,7 +545,7 @@ class Comparator:
         tests are performed on values stored in these snap files, in which test is
         to be performed
         :param main_file: main config file, to extract test files user wants to run
-        :param device: device name
+        :param device: device 
         :param check: variable to check if --check option is given or not
         :param diff: variable to check if --diff option is given or not
         :param db: database object
@@ -555,10 +556,12 @@ class Comparator:
         :param action: given by module version, either snap, snapcheck or check
         :return: object of operator.Operator containing test details
         """
+        hostname = device.hostname
+        renderer = TemplateRenderer()
         op = Operator()
-        op.device = device
+        op.device = hostname
         tests_files = []
-        self.log_detail['hostname'] = device
+        self.log_detail['hostname'] = hostname
         # get the test files from config.yml
         if main_file.get('tests') is None:
             self.logger_check.error(
@@ -574,8 +577,7 @@ class Comparator:
                             'test_file_path'),
                         tfile)
                 if os.path.isfile(tfile):
-                    test_file = open(tfile, 'r')
-                    tests_files.append(yaml.load(test_file))
+                    tests_files.append(renderer.load(tfile, device))
                 else:
                     self.logger_check.error(
                         colorama.Fore.RED +
@@ -592,7 +594,7 @@ class Comparator:
                 else:
                     for t in tests:
                         tests_included.append(t)
-                message= self._print_testmssg("Device: "+device, "*")
+                message= self._print_testmssg("Device: "+hostname, "*")
                 self.logger_check.info(colorama.Fore.BLUE + message, extra=self.log_detail)
                 for val in tests_included:
                     self.logger_check.info(
@@ -637,14 +639,14 @@ class Comparator:
                             if (db['first_snap_id'] is not None) and (
                                     db['second_snap_id'] is not None):
                                 snapfile1, data_format1 = a.get_xml_using_snap_id(
-                                    str(device), name, db['first_snap_id'])
+                                    str(hostname), name, db['first_snap_id'])
                                 snapfile2, data_format2 = a.get_xml_using_snap_id(
-                                    str(device), name, db['second_snap_id'])
+                                    str(hostname), name, db['second_snap_id'])
                             else:
                                 snapfile1, data_format1 = a.get_xml_using_snapname(
-                                    str(device), name, pre)
+                                    str(hostname), name, pre)
                                 snapfile2, data_format2 = a.get_xml_using_snapname(
-                                    str(device), name, post)
+                                    str(hostname), name, post)
                             if reply_format != data_format1 or reply_format != data_format2:
                                 self.logger_check.error(colorama.Fore.RED + "ERROR!! Data stored in database is not in %s format."
                                                         % reply_format, extra=self.log_detail)
@@ -654,7 +656,7 @@ class Comparator:
                         elif db.get('check_from_sqlite') is True:
                             a = SqliteExtractXml(db.get('db_name'))
                             snapfile1, data_format1 = a.get_xml_using_snapname(
-                                str(device), name, pre)
+                                str(hostname), name, pre)
                             if reply_format != data_format1:
                                 self.logger_check.error(
                                     colorama.Fore.RED +
@@ -665,7 +667,7 @@ class Comparator:
                                 # sys.exit(1)
                         else:
                             snapfile1 = self.generate_snap_file(
-                                device,
+                                hostname,
                                 pre,
                                 name,
                                 reply_format)
@@ -675,7 +677,7 @@ class Comparator:
                         if (check is True or action is "check") and reply_format == 'xml':
                             if db.get('check_from_sqlite') is False:
                                 snapfile2 = self.generate_snap_file(
-                                    device,
+                                    hostname,
                                     post,
                                     name,
                                     reply_format)
@@ -695,7 +697,7 @@ class Comparator:
                         elif(diff is True):
                             if db.get('check_from_sqlite') is False:
                                 snapfile2 = self.generate_snap_file(
-                                    device,
+                                    hostname,
                                     post,
                                     name,
                                     reply_format)

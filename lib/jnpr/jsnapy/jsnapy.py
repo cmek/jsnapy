@@ -16,6 +16,7 @@ from copy import deepcopy
 from threading import Thread
 
 import yaml
+from jinja2 import Environment
 from jnpr.jsnapy import get_path, version, get_config_location, DirStore
 from jnpr.jsnapy.check import Comparator
 from jnpr.jsnapy.notify import Notification
@@ -24,6 +25,7 @@ from jnpr.jsnapy import version
 from jnpr.jsnapy.operator import Operator
 from jnpr.jsnapy.snap import Parser
 from jnpr.junos.exception import ConnectAuthError
+from jnpr.jsnapy.templates import TemplateRenderer
 
 import colorama
 import setup_logging
@@ -369,6 +371,7 @@ class SnapAdmin:
         :param hostname: hostname of device
         :param config_data : data of main config file
         """
+        renderer = TemplateRenderer()
         val = None
         test_files = []
         for tfile in config_data.get('tests'):
@@ -379,8 +382,7 @@ class SnapAdmin:
                         'test_file_path'),
                     tfile)
             if os.path.isfile(tfile):
-                test_file = open(tfile, 'r')
-                test_files.append(yaml.load(test_file))
+                test_files.append(renderer.load(tfile, dev))
             else:
                 self.logger.error(
                     colorama.Fore.RED +
@@ -393,7 +395,7 @@ class SnapAdmin:
         return val
 
     def compare_tests(
-            self, hostname, config_data, pre_snap=None, post_snap=None, action=None):
+            self, dev, config_data, pre_snap=None, post_snap=None, action=None):
         """
         called by check and snapcheck argument, to compare snap files
         calls the function to compare snapshots based on arguments given
@@ -401,6 +403,7 @@ class SnapAdmin:
         :param hostname: device name
         :return: return object of Operator containing test details
         """
+        hostname = dev.hostname
         comp = Comparator()
         chk = self.args.check
         diff = self.args.diff
@@ -409,7 +412,7 @@ class SnapAdmin:
             post_snap_file = self.args.post_snapfile if post_snap is None else post_snap
             test_obj = comp.generate_test_files(
                 config_data,
-                hostname,
+                dev,
                 chk,
                 diff,
                 self.db,
@@ -420,7 +423,7 @@ class SnapAdmin:
         else:
             test_obj = comp.generate_test_files(
                 config_data,
-                hostname,
+                dev,
                 chk,
                 diff,
                 self.db,
@@ -561,8 +564,53 @@ class SnapAdmin:
         """
         res = Operator()
 
+        #XXX this is a bit of a hack. since compare_test actually needs
+        #    a full device object, not only a hostname, we're going
+        #    to create it here. normally it's created in the connect()
+        #    but connect() also has some side effect of doing rpc calls
+        #    so ideally connect() should be rewritten to only do what
+        #    the name suggests and all the extra functionality moved to
+        #    some other functions. that's in a  TODO list before this
+        #    can be submited :)
+        # XXX WARNING, also that connect() function does some weird recursion
+        #    when password is incorrect, I'm not even sure that's going to work
+        # XXX actually, device connections should probably be kept in a singleton/caching
+        # pool or something similar to avoid multiple connections....
+
+        #XXX/TODO now this is even a bigger hack, since we're trying to extract
+        # the login information from the config data
+        try:
+            device_config = filter(lambda x: x.get('device') == hostname, 
+                                   config_data.get('hosts'))[0]
+        except IndexError:
+            self.logger.error(colorama.Fore.RED +
+                                      "\nERROR occurred %s" %
+                                      str(ex),
+                                      extra=self.log_detail)
+            raise Exception("Device {} not found in the config file.".format(hostname))
+
+        username = device_config.get("username", None)
+        password = device_config.get("passwd", None)
+        if username is None:
+            username = raw_input("\nEnter user name: ")
+
+        dev = Device(
+                host=hostname,
+                user=username,
+                passwd=password,
+                gather_facts=False)
+        try:
+            dev.open()
+        except ConnectAuthError as ex:
+            ### ok, we're not going to fix that now, so just exit
+            self.logger.error(colorama.Fore.RED +
+                              "\nERROR occurred %s" %
+                               str(ex))
+
+        # XXX end of main hack...
+       
         res = self.compare_tests(
-                hostname,
+                dev,
                 config_data,
                 snap_file,
                 post_snap,
